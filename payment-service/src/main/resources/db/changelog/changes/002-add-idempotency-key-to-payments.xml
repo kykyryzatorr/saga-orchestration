@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            https://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
+
+    <changeSet id="002-add-idempotency-key-to-payments" author="saga">
+
+        <addColumn tableName="payments">
+            <column name="idempotency_key" type="VARCHAR(255)"/>
+        </addColumn>
+
+        <createIndex tableName="payments" indexName="idx_payments_idempotency_key" unique="true">
+            <column name="idempotency_key"/>
+        </createIndex>
+
+    </changeSet>
+
+</databaseChangeLog>

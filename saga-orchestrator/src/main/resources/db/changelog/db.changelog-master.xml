@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            https://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
+
+    <include file="db/changelog/changes/001-create-saga-instances-table.xml"/>
+    <include file="db/changelog/changes/002-create-saga-steps-table.xml"/>
+    <include file="db/changelog/changes/003-add-idempotency-key-to-saga-instances.xml"/>
+    <include file="db/changelog/changes/004-create-outbox-events-table.xml"/>
+    <include file="db/changelog/changes/005-add-recovery-attempts-to-saga-instances.xml"/>
+
+</databaseChangeLog>

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            https://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
+
+    <changeSet id="005-add-recovery-attempts-to-saga-instances" author="saga">
+
+        <addColumn tableName="saga_instances">
+            <column name="recovery_attempts" type="INT" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+
+        <createIndex tableName="saga_instances" indexName="idx_saga_instances_status_updated_at">
+            <column name="status"/>
+            <column name="updated_at"/>
+        </createIndex>
+
+    </changeSet>
+
+</databaseChangeLog>

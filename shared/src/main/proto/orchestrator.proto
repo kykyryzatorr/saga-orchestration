@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+package orchestrator;
+
+option java_multiple_files = true;
+option java_package = "com.saga.orchestrator.grpc";
+option java_outer_classname = "OrchestratorProto";
+
+// ─── Saga Orchestrator gRPC Definition ───────────────────────────────────────
+service OrchestratorService {
+  rpc StartSaga  (StartSagaRequest)  returns (StartSagaResponse);
+  rpc GetSagaStatus (SagaStatusRequest) returns (SagaStatusResponse);
+}
+
+message StartSagaRequest {
+  string user_id    = 1;
+  string product_id = 2;
+  int32  quantity   = 3;
+  double unit_price = 4;
+  string currency   = 5;
+  string idempotency_key = 6;  // optional; empty string = not supplied
+}
+
+message StartSagaResponse {
+  string saga_id  = 1;
+  string order_id = 2;
+  string status   = 3;  // STARTED | COMPLETED | FAILED | COMPENSATING
+  string message  = 4;
+}
+
+message SagaStatusRequest {
+  string saga_id = 1;
+}
+
+message SagaStatusResponse {
+  string saga_id      = 1;
+  string order_id     = 2;
+  string current_step = 3;
+  string status       = 4;
+}

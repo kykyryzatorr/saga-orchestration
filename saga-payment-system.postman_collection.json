@@ -1,0 +1,488 @@
+{
+  "info": {
+    "name": "Saga Pattern Payment System",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "End-to-end test collection for the Saga Pattern Payment System.\n\nFlow:\n  1. Create a product (seeds inventory)\n  2. Run 'Start Order (Saga)' to trigger the happy-path saga\n  3. Poll 'Get Saga Status' until COMPLETED\n  4. Use the scenario folders to explore failure and compensation flows\n\nInter-service gRPC calls triggered internally:\n  • POST /api/orders → orchestrator calls inventory-service.checkStock (fast-fail)\n  • POST /api/orders → orchestrator calls inventory-service.getProduct (product validation)\n  • Payment processing → payment-service calls order-service.getOrder (status and total validation)"
+  },
+  "variable": [
+    { "key": "orchestrator_url", "value": "http://localhost:8084" },
+    { "key": "order_url",        "value": "http://localhost:8082" },
+    { "key": "payment_url",      "value": "http://localhost:8081" },
+    { "key": "inventory_url",    "value": "http://localhost:8083" },
+    { "key": "saga_id",          "value": "" },
+    { "key": "order_id",         "value": "" },
+    { "key": "payment_id",       "value": "" },
+    { "key": "product_id",       "value": "" },
+    { "key": "saga_id_fail",     "value": "" },
+    { "key": "order_id_fail",    "value": "" },
+    { "key": "low_stock_product_id", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "1. Inventory Service",
+      "item": [
+        {
+          "name": "Create Product",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    const body = pm.response.json();",
+                  "    pm.collectionVariables.set('product_id', body.id);",
+                  "    pm.test('Product created', () => pm.response.to.have.status(201));",
+                  "    pm.test('Has id', () => pm.expect(body.id).to.be.a('string'));",
+                  "    pm.test('Stock is 100', () => pm.expect(body.quantity).to.eql(100));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{inventory_url}}/api/products",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Wireless Headphones\",\n  \"quantity\": 100\n}"
+            }
+          }
+        },
+        {
+          "name": "Get All Products",
+          "request": {
+            "method": "GET",
+            "url": "{{inventory_url}}/api/products"
+          }
+        },
+        {
+          "name": "Get Product by ID",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Product found', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('Available quantity field present', () => pm.expect(body).to.have.property('availableQuantity'));",
+                  "pm.test('Reserved quantity field present', () => pm.expect(body).to.have.property('reservedQuantity'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{inventory_url}}/api/products/{{product_id}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Saga Orchestrator",
+      "item": [
+        {
+          "name": "Start Order (Saga)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Saga started (201)', () => pm.response.to.have.status(201));",
+                  "if (pm.response.code === 201) {",
+                  "    const body = pm.response.json();",
+                  "    pm.collectionVariables.set('saga_id', body.sagaId);",
+                  "    pm.collectionVariables.set('order_id', body.orderId);",
+                  "    pm.test('sagaId returned', () => pm.expect(body.sagaId).to.be.a('string'));",
+                  "    pm.test('orderId returned', () => pm.expect(body.orderId).to.be.a('string'));",
+                  "    pm.test('Status is STARTED', () => pm.expect(body.status).to.eql('STARTED'));",
+                  "    console.log('Saga started: sagaId=' + body.sagaId + ', orderId=' + body.orderId);",
+                  "    console.log('Internal gRPC calls fired: checkStock + getProduct → inventory-service');",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{orchestrator_url}}/api/orders",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": \"user-123\",\n  \"productId\": \"{{product_id}}\",\n  \"quantity\": 2,\n  \"unitPrice\": \"49.99\",\n  \"currency\": \"USD\"\n}"
+            },
+            "description": "Triggers the full saga. Internally the orchestrator:\n  1. Calls inventory-service.checkStock (gRPC) — fast-fail if stock < quantity\n  2. Calls inventory-service.getProduct (gRPC) — validates product, logs canonical name\n  3. Calls order-service.createOrder (gRPC) — creates the order synchronously\n  4. Publishes StockReserveCommand → Kafka → inventory-service\n  5. Kafka drives the rest: stock reserve → payment (payment-service calls order-service.getOrder via gRPC) → confirm"
+          }
+        },
+        {
+          "name": "Get Saga Status",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Saga found (200)', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('Has status field', () => pm.expect(body).to.have.property('status'));",
+                  "pm.test('Has steps array', () => pm.expect(body.steps).to.be.an('array'));",
+                  "console.log('Saga status: ' + body.status + ', step: ' + body.currentStep);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{orchestrator_url}}/api/sagas/{{saga_id}}",
+            "description": "Poll this endpoint after 'Start Order'. Expect COMPLETED after ~1-2 seconds."
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Order Service",
+      "item": [
+        {
+          "name": "Get Order by ID",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Order found (200)', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "if (body.id) {",
+                  "    pm.test('Status is CONFIRMED', () => pm.expect(body.status).to.eql('CONFIRMED'));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{order_url}}/api/orders/{{order_id}}"
+          }
+        },
+        {
+          "name": "Get Orders by User",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{order_url}}/api/orders?userId=user-123",
+              "host": ["{{order_url}}"],
+              "path": ["api", "orders"],
+              "query": [{ "key": "userId", "value": "user-123" }]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Payment Service",
+      "item": [
+        {
+          "name": "Get Payment by Order ID",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Payment found (200)', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "if (body.id) {",
+                  "    pm.collectionVariables.set('payment_id', body.id);",
+                  "    pm.test('Status is SUCCESS', () => pm.expect(body.status).to.eql('SUCCESS'));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{payment_url}}/api/payments/order/{{order_id}}",
+            "description": "Fetches the payment for the last successful saga order."
+          }
+        },
+        {
+          "name": "Get Payment by ID",
+          "request": {
+            "method": "GET",
+            "url": "{{payment_url}}/api/payments/{{payment_id}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "5. Scenario — Insufficient Stock (Fast Fail via gRPC CheckStock)",
+      "item": [
+        {
+          "name": "5a. Create Low-Stock Product (qty=3)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Low-stock product created (201)', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.collectionVariables.set('low_stock_product_id', body.id);",
+                  "pm.test('Stock is 3', () => pm.expect(body.quantity).to.eql(3));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{inventory_url}}/api/products",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Limited Edition Watch\",\n  \"quantity\": 3\n}"
+            }
+          }
+        },
+        {
+          "name": "5b. Try to Order 50 Units — Rejected (gRPC CheckStock Fast-Fail)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Insufficient stock rejected with 400', () => pm.response.to.have.status(400));",
+                  "const body = pm.response.json();",
+                  "pm.test('Error message mentions stock', () => pm.expect(body.error).to.include('Insufficient stock'));",
+                  "console.log('Fast-fail via gRPC: ' + body.error);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{orchestrator_url}}/api/orders",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": \"user-456\",\n  \"productId\": \"{{low_stock_product_id}}\",\n  \"quantity\": 50,\n  \"unitPrice\": \"99.99\",\n  \"currency\": \"USD\"\n}"
+            },
+            "description": "Expects 400 Bad Request. Orchestrator calls inventory-service.checkStock (gRPC) before creating any order. Since requested qty (50) > available (3), the saga is rejected immediately — no order is created, no Kafka messages are published."
+          }
+        },
+        {
+          "name": "5c. Verify No Orphan Orders Created",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('User has no orders for this product', () => {",
+                  "    if (pm.response.code === 200) {",
+                  "        const orders = pm.response.json();",
+                  "        const orphanOrders = orders.filter(o => o.productId === pm.collectionVariables.get('low_stock_product_id'));",
+                  "        pm.expect(orphanOrders.length).to.eql(0);",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{order_url}}/api/orders?userId=user-456",
+              "host": ["{{order_url}}"],
+              "path": ["api", "orders"],
+              "query": [{ "key": "userId", "value": "user-456" }]
+            },
+            "description": "Because checkStock gRPC call rejected the saga before reaching order-service, there should be no orders for user-456."
+          }
+        }
+      ]
+    },
+    {
+      "name": "6. Scenario — Payment Failure & Compensation",
+      "item": [
+        {
+          "name": "6a. Start High-Value Order (Payment Gateway Will Reject)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Saga started (201)', () => pm.response.to.have.status(201));",
+                  "if (pm.response.code === 201) {",
+                  "    const body = pm.response.json();",
+                  "    pm.collectionVariables.set('saga_id_fail', body.sagaId);",
+                  "    pm.collectionVariables.set('order_id_fail', body.orderId);",
+                  "    pm.test('Status is STARTED', () => pm.expect(body.status).to.eql('STARTED'));",
+                  "    console.log('Compensation saga started: sagaId=' + body.sagaId);",
+                  "    console.log('Note: payment-service will call order-service.getOrder (gRPC) before charging');",
+                  "    console.log('Payment will be declined (totalAmount >= 10000). Watch compensation flow.');",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{orchestrator_url}}/api/orders",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": \"user-789\",\n  \"productId\": \"{{product_id}}\",\n  \"quantity\": 1,\n  \"unitPrice\": \"15000.00\",\n  \"currency\": \"USD\"\n}"
+            },
+            "description": "Amount >= 10000 is rejected by the simulated payment gateway. This triggers the full compensation flow:\n  1. checkStock (gRPC) → passes\n  2. getProduct (gRPC) → passes\n  3. createOrder (gRPC) → PENDING order created\n  4. StockReserveCommand (Kafka) → inventory reserves stock\n  5. payment-service calls order-service.getOrder (gRPC) → validates PENDING\n  6. Payment gateway rejects → PaymentFailedEvent\n  7. Orchestrator publishes StockReleaseCommand\n  8. Inventory releases stock → StockReleasedEvent\n  9. Order status → CANCELLED, Saga status → FAILED"
+          }
+        },
+        {
+          "name": "6b. Poll Saga Until FAILED (run after ~2s)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Saga found (200)', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "if (body.status === 'FAILED') {",
+                  "    pm.test('Saga FAILED as expected', () => pm.expect(body.status).to.eql('FAILED'));",
+                  "    pm.test('Has compensation steps', () => {",
+                  "        const steps = body.steps || [];",
+                  "        const compensationSteps = steps.filter(s => s.status === 'COMPENSATED');",
+                  "        pm.expect(compensationSteps.length).to.be.above(0);",
+                  "    });",
+                  "    console.log('Compensation complete. Steps: ' + JSON.stringify(body.steps));",
+                  "} else {",
+                  "    console.log('Saga still processing: ' + body.status + ' — wait 1s and retry');",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{orchestrator_url}}/api/sagas/{{saga_id_fail}}",
+            "description": "Poll until status=FAILED. Should settle within 1-2 seconds. Compensation steps (STOCK_RELEASED, ORDER_CANCELLED) are visible in the steps array."
+          }
+        },
+        {
+          "name": "6c. Verify Order is CANCELLED",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Order found (200)', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('Order is CANCELLED', () => pm.expect(body.status).to.eql('CANCELLED'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{order_url}}/api/orders/{{order_id_fail}}"
+          }
+        },
+        {
+          "name": "6d. Verify Stock Restored After Compensation",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Product found (200)', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('reservedQuantity reduced back', () => {",
+                  "    console.log('availableQty after compensation: ' + body.availableQuantity);",
+                  "    pm.expect(body.reservedQuantity).to.be.a('number');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{inventory_url}}/api/products/{{product_id}}",
+            "description": "Stock reserved quantity should have decreased back after compensation (StockReleaseCommand processed by inventory-service)."
+          }
+        },
+        {
+          "name": "6e. Verify Payment Status is FAILED",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Payment found (200)', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('Payment is FAILED', () => pm.expect(body.status).to.eql('FAILED'));",
+                  "pm.test('Failure reason set', () => pm.expect(body.failureReason).to.be.a('string'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{payment_url}}/api/payments/order/{{order_id_fail}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "7. Post-Saga Verification",
+      "item": [
+        {
+          "name": "7a. Verify Stock Consumed (After Happy Path)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Product found (200)', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('Total quantity unchanged', () => pm.expect(body.quantity).to.eql(100));",
+                  "console.log('availableQty=' + body.availableQuantity + ', reservedQty=' + body.reservedQuantity);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{inventory_url}}/api/products/{{product_id}}",
+            "description": "After a successful saga (qty=2 ordered), availableQuantity should be 98 and reservedQuantity=2."
+          }
+        },
+        {
+          "name": "7b. Get User Order History",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{order_url}}/api/orders?userId=user-123",
+              "host": ["{{order_url}}"],
+              "path": ["api", "orders"],
+              "query": [{ "key": "userId", "value": "user-123" }]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "8. Actuator Health Checks",
+      "item": [
+        {
+          "name": "Orchestrator Health",
+          "request": { "method": "GET", "url": "{{orchestrator_url}}/actuator/health" }
+        },
+        {
+          "name": "Order Service Health",
+          "request": { "method": "GET", "url": "{{order_url}}/actuator/health" }
+        },
+        {
+          "name": "Payment Service Health",
+          "request": { "method": "GET", "url": "{{payment_url}}/actuator/health" }
+        },
+        {
+          "name": "Inventory Service Health",
+          "request": { "method": "GET", "url": "{{inventory_url}}/actuator/health" }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            https://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
+
+    <changeSet id="001-create-saga-instances-table" author="saga">
+
+        <createTable tableName="saga_instances">
+            <column name="id" type="UUID" defaultValueComputed="gen_random_uuid()">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="order_id" type="VARCHAR(255)">
+                <constraints nullable="false"/>
+            </column>
+            <!-- ORDER_CREATED | STOCK_RESERVED | PAYMENT_PROCESSED | COMPLETED | COMPENSATING | FAILED -->
+            <column name="current_step" type="VARCHAR(100)">
+                <constraints nullable="false"/>
+            </column>
+            <!-- STARTED | COMPLETED | COMPENSATING | FAILED -->
+            <column name="status" type="VARCHAR(50)" defaultValue="STARTED">
+                <constraints nullable="false"/>
+            </column>
+            <!-- JSON payload with saga context data -->
+            <column name="payload" type="TEXT"/>
+            <column name="request_hash" type="VARCHAR(64)"/>
+            <column name="created_at" type="TIMESTAMP" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="TIMESTAMP" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+
+        <createIndex tableName="saga_instances" indexName="idx_saga_order_id">
+            <column name="order_id"/>
+        </createIndex>
+
+        <createIndex tableName="saga_instances" indexName="idx_saga_status">
+            <column name="status"/>
+        </createIndex>
+
+    </changeSet>
+
+</databaseChangeLog>
